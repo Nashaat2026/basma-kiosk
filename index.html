@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0c447c">
+<title>بصمة الحضور</title>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/dist/face-api.js"></script>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:Tahoma,Arial,sans-serif;background:#0c447c;color:#222;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.card{max-width:520px;margin:0 auto;min-height:100%;background:#fff;padding:14px 16px 20px}
+.top{display:flex;justify-content:space-between;align-items:baseline}
+#br{color:#777;font-size:15px}
+#clock{font-size:34px;font-weight:bold;color:#0c447c}
+#date{color:#777;font-size:14px;text-align:left}
+.camwrap{position:relative;width:100%;aspect-ratio:3/4;max-height:52vh;margin:10px auto 0;border-radius:18px;overflow:hidden;background:#111}
+video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#oval{position:absolute;left:18%;top:10%;width:64%;height:74%;border:5px dashed rgba(255,255,255,.65);border-radius:50%;pointer-events:none;transition:border-color .2s}
+#oval.good{border-color:#5fd35f;border-style:solid}
+#oval.bad{border-color:#ff6b6b}
+#prompt{position:absolute;left:0;right:0;bottom:0;padding:14px 8px;background:rgba(0,0,0,.6);color:#fff;font-size:26px;font-weight:bold;text-align:center;display:none}
+#arrow{position:absolute;top:38%;font-size:90px;color:#ffd84d;display:none;text-shadow:0 0 10px #000}
+#bar{position:absolute;left:0;top:0;height:6px;background:#ffd84d;width:0}
+label{display:block;font-size:16px;color:#555;margin:10px 0 4px}
+input{width:100%;font-size:28px;padding:10px;border:2px solid #ccc;border-radius:12px;text-align:center;letter-spacing:4px}
+.btns{display:flex;gap:12px;margin-top:12px}
+.big{flex:1;font-size:26px;padding:20px 6px;border:none;border-radius:14px;color:#fff;font-weight:bold}
+#in{background:#3b6d11}#out{background:#a32d2d}#enr{background:#0c447c}#cancel{background:#888;font-size:18px;padding:12px}
+.big:disabled{opacity:.45}
+#msg{margin-top:12px;padding:14px;border-radius:12px;font-size:21px;text-align:center;display:none}
+.ok{background:#eaf3de;color:#27500a}.err{background:#fcebeb;color:#791f1f}.wait{background:#e6f1fb;color:#0c447c}
+#mgr{display:block;text-align:center;color:#999;font-size:14px;margin-top:14px;text-decoration:underline}
+#enrollBox{display:none}
+#dbg{font:11px monospace;color:#aaa;text-align:center;min-height:13px}
+#bridge{position:absolute;width:1px;height:1px;border:0;left:-10px;top:-10px;opacity:0}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="top"><div><div id="clock">--:--</div><div id="br"></div></div><div id="date"></div></div>
+  <div class="camwrap">
+    <video id="v" playsinline muted autoplay></video>
+    <div id="oval"></div><div id="arrow"></div><div id="bar"></div><div id="prompt"></div>
+  </div>
+  <div id="dbg"></div>
+  <div id="main">
+    <label>الكود</label>
+    <input id="code" inputmode="numeric" autocomplete="off" maxlength="8">
+    <div id="punchBox">
+      <div class="btns">
+        <button class="big" id="in" disabled>حضور</button>
+        <button class="big" id="out" disabled>انصراف</button>
+      </div>
+    </div>
+    <div id="enrollBox">
+      <label>رقم المدير</label>
+      <input id="admin" type="password" inputmode="numeric" autocomplete="off">
+      <div class="btns"><button class="big" id="enr" disabled>سجّل وش الموظف</button></div>
+    </div>
+    <div class="btns" id="cancelBox" style="display:none"><button class="big" id="cancel">إلغاء</button></div>
+    <a id="mgr">تسجيل وش موظف (للمدير)</a>
+  </div>
+  <div id="msg"></div>
+</div>
+<iframe id="bridge" title="b"></iframe>
+<script>
+"use strict";
+var MODEL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/model";
+var U = "", TOK = "", BRANCH = "", TGT = null, READY_B = false, READY_F = false, CAM = false;
+var MODE = "punch", BUSY = false, CLR = null, ABORT = false;
+var PEND = {}, SEQ = 0;
+// حدود اللف (نسبة إزاحة المناخير من نص الوش لعرض الوش)
+var FRONT = 0.08, TURN = 0.15, ENR_MIN = 0.05, ENR_MAX = 0.22, SAME_FACE = 0.45;
+var DEBUG = /[#&]debug=1/.test(location.hash);
+var URL_OK = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+
+function $(i){return document.getElementById(i);}
+function show(t,c){var m=$("msg");m.textContent=t;m.className=c;m.style.display="block";}
+function hideMsg(){$("msg").style.display="none";}
+function prompt_(t){var p=$("prompt");if(t){p.textContent=t;p.style.display="block";}else p.style.display="none";}
+function arrow(d){var a=$("arrow");if(!d){a.style.display="none";return;}a.textContent=d==="R"?"➡":"⬅";a.style.left=d==="R"?"":"6%";a.style.right=d==="R"?"6%":"";a.style.display="block";}
+function oval(c){$("oval").className=c||"";}
+function bar(p){$("bar").style.width=Math.max(0,Math.min(100,p))+"%";}
+function tick(){var d=new Date();$("clock").textContent=d.toLocaleTimeString("ar-EG",{hour:"2-digit",minute:"2-digit"});$("date").textContent=d.toLocaleDateString("ar-EG",{weekday:"long",day:"numeric",month:"long"});}
+tick();setInterval(tick,1000);
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+function enable(){var on=READY_B&&READY_F&&CAM&&!BUSY;$("in").disabled=!on;$("out").disabled=!on;$("enr").disabled=!on;}
+function store(k,v){try{if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);}catch(e){}}
+function load(k){try{return localStorage.getItem(k)||"";}catch(e){return "";}}
+
+// ===== الكوبري للنظام (صفحة جوجل مخفية) =====
+window.addEventListener("message",function(e){
+  if(!/^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/.test(e.origin))return;
+  var m=e.data||{};
+  if(m.t==="basma-ready"){TGT={w:e.source,o:e.origin};if(!READY_B){READY_B=true;onBridge();}return;}
+  if(m.t==="basma"&&PEND[m.id]){var p=PEND[m.id];delete PEND[m.id];clearTimeout(p.tm);m.ok?p.res(m.r):p.rej(new Error(m.err));}
+});
+function api(fn,args,ms){
+  return new Promise(function(res,rej){
+    if(!TGT)return rej(new Error("مفيش اتصال بالنظام"));
+    var id=++SEQ;
+    PEND[id]={res:res,rej:rej,tm:setTimeout(function(){delete PEND[id];rej(new Error("النت بطيء — الرد ما وصلش"));},ms||45000)};
+    TGT.w.postMessage({t:"basma",id:id,fn:fn,args:args},TGT.o);
+  });
+}
+
+// ===== التفعيل =====
+var SETUP="";
+(function init(){
+  var h=new URLSearchParams(location.hash.slice(1));
+  var u=h.get("u")||"", s=(h.get("setup")||"").replace(/[^A-Za-z0-9]/g,"");
+  if(u&&s&&URL_OK.test(u)){U=u;SETUP=s;}
+  else{U=load("basma_u");TOK=load("basma_tok");BRANCH=load("basma_br");}
+  if(location.hash&&!DEBUG)history.replaceState(null,"",location.pathname);
+  if(!U||(!SETUP&&!TOK)){off("الموبايل ده مش متفعّل ككشك بصمة — كلم الـ HR");return;}
+  $("br").textContent=BRANCH;
+  show(SETUP?"جاري تفعيل الموبايل...":"جاري الاتصال...","wait");
+  $("bridge").src=U+"?kiosk=1&bridge=1";
+  setTimeout(function(){if(!READY_B)show("مش قادر أوصل للنظام — اتأكد من النت وافتح الصفحة تاني","err");},30000);
+  loadFace();startCam();
+})();
+function off(t){$("main").style.display="none";show(t,"err");}
+async function onBridge(){
+  try{
+    if(SETUP){
+      var r=await api("kioskActivate",[SETUP,"موبايل "+new Date().toLocaleDateString("en-GB")]);
+      if(!r||!r.ok){off((r&&r.msg)||"التفعيل فشل");return;}
+      TOK=r.token;BRANCH=r.name||"";store("basma_u",U);store("basma_tok",TOK);store("basma_br",BRANCH);SETUP="";
+      $("br").textContent=BRANCH;
+      show("✅ الموبايل ده اتفعّل ككشك بصمة"+(BRANCH?" — "+BRANCH:"")+". من دلوقتي افتح الصفحة دي بس (اعملها Add to Home screen)","ok");
+      setTimeout(hideMsg,9000);
+    }else{
+      var c=await api("kioskCheck",[TOK]);
+      if(!c){store("basma_tok",null);off("الموبايل ده اتلغى ككشك — كلم الـ HR");return;}
+      if(c.name){BRANCH=c.name;store("basma_br",BRANCH);$("br").textContent=BRANCH;}
+      if(READY_F&&CAM)hideMsg();
+    }
+    enable();
+  }catch(e){show("حصلت مشكلة: "+e.message,"err");}
+}
+
+// ===== الكاميرا والتعرف على الوش =====
+async function loadFace(){
+  try{
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL);
+    READY_F=true;enable();if(READY_B&&CAM&&!SETUP)hideMsg();
+  }catch(e){show("مش قادر أحمّل التعرف على الوش — اتأكد من النت وافتح الصفحة تاني","err");}
+}
+async function startCam(){
+  try{
+    var st=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}});
+    var v=$("v");v.srcObject=st;await v.play();CAM=true;enable();
+    if(READY_B&&READY_F&&!SETUP)hideMsg();
+    try{if(navigator.wakeLock)navigator.wakeLock.request("screen");}catch(e){}
+  }catch(e){show("الكاميرا مش شغالة — اسمح للمتصفح يستخدم الكاميرا (من القفل جنب اللينك) وافتح الصفحة تاني","err");}
+}
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible"){try{if(navigator.wakeLock)navigator.wakeLock.request("screen");}catch(e){}
+    var v=$("v");if(!v.srcObject||!v.srcObject.active){CAM=false;enable();startCam();}}
+});
+
+var OPT=null;
+function opts(){return OPT||(OPT=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:0.5}));}
+// بيرجع: {n: عدد الوشوش, yaw, size, lm} أو n=0
+async function look(){
+  var v=$("v");
+  var fs=await faceapi.detectAllFaces(v,opts()).withFaceLandmarks();
+  if(fs.length!==1)return {n:fs.length};
+  var p=fs[0].landmarks.positions, b=fs[0].detection.box;
+  var jl=p[0].x, jr=p[16].x, nose=p[30].x, w=jr-jl;
+  var yaw=w>0?(nose-(jl+jr)/2)/w:0;  // في الصورة الأصلية (مش المعكوسة): سالب = الموظف لاف ناحية يمينه
+  var vw=v.videoWidth||640;
+  var cx=(b.x+b.width/2)/vw;
+  if(DEBUG)$("dbg").textContent="yaw "+yaw.toFixed(3)+"  size "+(b.width/vw).toFixed(2);
+  return {n:1,yaw:yaw,size:b.width/vw,cx:cx};
+}
+// صورة من الفيديو + بصمة الوش منها
+async function grab(){
+  var v=$("v"),w=480,h=Math.round(w*(v.videoHeight||480)/(v.videoWidth||640));
+  var c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(v,0,0,w,h);
+  var f=await faceapi.detectAllFaces(c,new faceapi.TinyFaceDetectorOptions({inputSize:416,scoreThreshold:0.5})).withFaceLandmarks().withFaceDescriptors();
+  if(f.length!==1)return null;
+  return {desc:Array.from(f[0].descriptor),img:c.toDataURL("image/jpeg",0.72)};
+}
+function dist(a,b){var s=0;for(var i=0;i<a.length;i++){var d=a[i]-b[i];s+=d*d;}return Math.sqrt(s);}
+
+// بيستنى لحد ما الشرط يتحقق كام فريم ورا بعض — أو الوقت يخلص
+async function waitFor(cond,ms,need,hintFn){
+  var t0=Date.now(),ok=0;
+  while(Date.now()-t0<ms){
+    if(ABORT)throw new Error("ABORT");
+    var r=await look();
+    bar(100*(Date.now()-t0)/ms);
+    if(r.n>1){oval("bad");prompt_("واحد بس قدام الكاميرا");ok=0;continue;}
+    if(r.n===0){oval("bad");prompt_(hintFn?hintFn(null):"حط وشك جوه الدايرة");ok=0;continue;}
+    if(r.size<0.22){oval("bad");prompt_("قرّب من الموبايل");ok=0;continue;}
+    if(cond(r)){oval("good");if(++ok>=need){bar(0);return r;}}
+    else{oval("");ok=0;if(hintFn){var h=hintFn(r);if(h)prompt_(h);}}
+  }
+  bar(0);return null;
+}
+
+// ===== التحقق إنه شخص حقيقي: بص قدام → لف ناحية عشوائية → ارجع بص قدام =====
+async function liveCheck(){
+  var d=Math.random()<0.5?"R":"L";
+  prompt_("بص للكاميرا");
+  var a=await waitFor(function(r){return Math.abs(r.yaw)<FRONT;},8000,2,function(r){return r?"بص للكاميرا على طول":"حط وشك جوه الدايرة";});
+  if(!a)return {err:"ما شفتش وشك كويس — قرّب في نور كويس وجرب تاني"};
+  var g1=await grab();
+  if(!g1)return {err:"ما شفتش وشك كويس — جرب تاني"};
+  arrow(d);prompt_(d==="R"?"لف راسك يمين ➡":"⬅ لف راسك شمال");
+  var t=await waitFor(function(r){return d==="R"?r.yaw<-TURN:r.yaw>TURN;},5000,1,null);
+  arrow(null);
+  if(!t)return {err:"ما لفّتش راسك في الوقت — جرب تاني ولف راسك ناحية السهم"};
+  prompt_("ارجع بص للكاميرا");
+  var b=await waitFor(function(r){return Math.abs(r.yaw)<FRONT;},5000,2,null);
+  if(!b)return {err:"ارجع بص للكاميرا — جرب تاني"};
+  var g2=await grab();
+  if(!g2)return {err:"ما شفتش وشك كويس — جرب تاني"};
+  if(dist(g1.desc,g2.desc)>SAME_FACE)return {err:"الوش اتغير في النص — جرب تاني"};
+  return {desc:g2.desc,img:g2.img};
+}
+
+// ===== تسجيل وش موظف: 3 صور (قدام / يمين سنة / شمال سنة) =====
+async function enrollShots(){
+  var shots=[],img="";
+  prompt_("خلّي الموظف يبص للكاميرا");
+  var a=await waitFor(function(r){return Math.abs(r.yaw)<FRONT;},15000,3,null);
+  if(!a)return {err:"ما شفتش الوش كويس — قرّب في نور كويس وجرب تاني"};
+  var g=await grab();if(!g)return {err:"ما شفتش الوش كويس — جرب تاني"};
+  shots.push(g.desc);img=g.img;
+  var steps=[["R","لف راسك سنة صغيرة يمين ➡"],["L","⬅ لف راسك سنة صغيرة شمال"]];
+  for(var i=0;i<steps.length;i++){
+    var d=steps[i][0];arrow(d);prompt_(steps[i][1]);
+    var r=await waitFor(function(x){var y=d==="R"?-x.yaw:x.yaw;return y>ENR_MIN&&y<ENR_MAX;},12000,2,function(x){if(!x)return null;var y=d==="R"?-x.yaw:x.yaw;return y>=ENR_MAX?"كفاية — ارجع سنة":steps[i][1];});
+    arrow(null);
+    if(!r)return {err:"الصورة "+(i+2)+" ما اتاخدتش — جرب تاني"};
+    var gg=await grab();if(!gg)return {err:"ما شفتش الوش كويس — جرب تاني"};
+    if(dist(gg.desc,shots[0])>SAME_FACE)return {err:"الوش اتغير في النص — جرب تاني"};
+    shots.push(gg.desc);
+  }
+  return {shots:shots,img:img};
+}
+
+// ===== الزراير =====
+function startBusy(){BUSY=true;ABORT=false;enable();$("cancelBox").style.display="flex";$("mgr").style.display="none";hideMsg();clearTimeout(CLR);}
+function endBusy(){BUSY=false;enable();$("cancelBox").style.display="none";$("mgr").style.display="block";prompt_("");arrow(null);oval("");bar(0);}
+function resetLater(ms){clearTimeout(CLR);CLR=setTimeout(function(){$("code").value="";hideMsg();},ms);}
+
+async function punch(type){
+  var code=$("code").value.trim();
+  if(!code){show("اكتب الكود","err");return;}
+  if(BUSY)return;
+  startBusy();
+  try{
+    show("لحظة...","wait");
+    var lk=await api("kioskLookup",[TOK,code],20000);
+    if(!lk.ok){endBusy();show(lk.msg,"err");resetLater(7000);return;}
+    if(!lk.active){endBusy();show("الكود ده موقوف، كلم الـ HR","err");resetLater(7000);return;}
+    if(!lk.flag){endBusy();show(lk.name+"، إنت بتبصم من موبايلك — مش من الكشك","err");resetLater(7000);return;}
+    if(!lk.enrolled){endBusy();show(lk.name+"، وشك لسه مش متسجل على الكشك — كلم المدير يسجله","err");resetLater(9000);return;}
+    hideMsg();
+    var L=await liveCheck();
+    prompt_("");
+    if(L.err){endBusy();show(L.err,"err");resetLater(9000);return;}
+    show("جاري التسجيل...","wait");
+    var r=await api("kioskPunch",[TOK,code,"",type,L.img,0,L.desc]);
+    endBusy();show(r.msg,r.ok?"ok":"err");resetLater(r.ok?6000:9000);
+  }catch(e){endBusy();if(e.message!=="ABORT"){show("حصلت مشكلة: "+e.message,"err");resetLater(9000);}else{hideMsg();}}
+}
+async function enroll(){
+  var code=$("code").value.trim(),adm=$("admin").value.trim();
+  if(!code||!adm){show("اكتب كود الموظف ورقم المدير","err");return;}
+  if(BUSY)return;
+  startBusy();
+  try{
+    var lk=await api("kioskLookup",[TOK,code],20000);
+    if(!lk.ok){endBusy();show(lk.msg,"err");return;}
+    show("بنسجل وش "+lk.name,"wait");
+    var E=await enrollShots();
+    prompt_("");
+    if(E.err){endBusy();show(E.err,"err");return;}
+    show("جاري الحفظ...","wait");
+    var r=await api("kioskEnroll",[TOK,code,adm,E.shots,E.img]);
+    endBusy();show(r.msg,r.ok?"ok":"err");
+    if(r.ok){$("admin").value="";resetLater(9000);}
+  }catch(e){endBusy();if(e.message!=="ABORT")show("حصلت مشكلة: "+e.message,"err");else hideMsg();}
+}
+function toggleMgr(){
+  var on=$("enrollBox").style.display!=="block";
+  $("enrollBox").style.display=on?"block":"none";$("punchBox").style.display=on?"none":"block";
+  $("mgr").textContent=on?"رجوع للبصمة":"تسجيل وش موظف (للمدير)";
+  $("admin").value="";hideMsg();
+}
+$("in").onclick=function(){punch("in");};
+$("out").onclick=function(){punch("out");};
+$("enr").onclick=enroll;
+$("mgr").onclick=toggleMgr;
+$("cancel").onclick=function(){ABORT=true;};
+</script>
+</body>
+</html>
