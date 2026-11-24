@@ -263,8 +263,8 @@ async function punch(type){
     var lk=await api("kioskLookup",[TOK,code],20000);
     if(!lk.ok){endBusy();show(lk.msg,"err");resetLater(7000);return;}
     if(!lk.active){endBusy();show("الكود ده موقوف، كلم الـ HR","err");resetLater(7000);return;}
-    if(!lk.flag){endBusy();show(lk.name+"، إنت بتبصم من موبايلك — مش من الكشك","err");resetLater(7000);return;}
-    if(!lk.enrolled){endBusy();show(lk.name+"، وشك لسه مش متسجل على الكشك — كلم المدير يسجله","err");resetLater(9000);return;}
+    if(!lk.flag){endBusy();show("الكود ده بيبصم من الموبايل — مش من الكشك","err");resetLater(7000);return;}
+    if(!lk.enrolled){endBusy();show("الوش لسه مش متسجل للكود ده على الكشك — كلم المدير يسجله","err");resetLater(9000);return;}
     hideMsg();
     var L=await liveCheck();
     prompt_("");
